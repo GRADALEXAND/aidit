@@ -1830,3 +1830,264 @@ window.uxAudit = {
 })();
 
 })();
+
+// ================================================================
+// БЛОК СОХРАНЕНИЯ В localStorage
+// Добавить в САМЫЙ КОНЕЦ audit.js, после последней строки
+// ================================================================
+
+(function SAVE_TO_STORAGE() {
+
+  var KEY = 'site_audit_v1';
+  var url = location.href;
+  var hostname = location.hostname;
+
+  // Загружаем существующие данные
+  var store;
+  try {
+    store = JSON.parse(localStorage.getItem(KEY) || 'null');
+  } catch(e) {
+    store = null;
+  }
+
+  // Если данные с другого сайта — спрашиваем
+  if (store && store.hostname && store.hostname !== hostname) {
+    if (confirm('В буфере данные другого сайта (' + store.hostname + ').\nОчистить и начать заново для ' + hostname + '?')) {
+      store = null;
+    } else {
+      return;
+    }
+  }
+
+  if (!store) {
+    store = { hostname: hostname, pages: [], startedAt: new Date().toISOString() };
+  }
+
+  // Проверяем — эту страницу уже собирали?
+  var existingIdx = store.pages.findIndex(function(p) { return p.url === url; });
+  if (existingIdx !== -1) {
+    if (!confirm('Страница уже собрана (' + url + ').\nПересобрать?')) {
+      console.log('%c⚠️ Страница уже в буфере. Пропускаю.', 'color:#d97706;font-weight:bold');
+      console.log('%cВсего собрано страниц: ' + store.pages.length, 'color:#6b7280');
+      return;
+    }
+    store.pages.splice(existingIdx, 1);
+  }
+
+  // ── СОБИРАЕМ ДАННЫЕ СТРАНИЦЫ ────────────────────────────────
+
+  // META
+  var metaDescEl = document.querySelector('meta[name="description"]');
+  var metaKwEl   = document.querySelector('meta[name="keywords"]');
+  var canonicalEl = document.querySelector('link[rel="canonical"]');
+  var robotsEl   = document.querySelector('meta[name="robots"]');
+
+  var meta = {
+    description : metaDescEl ? metaDescEl.content.trim() : '',
+    descLength  : metaDescEl ? metaDescEl.content.trim().length : 0,
+    keywords    : metaKwEl ? metaKwEl.content.trim() : '',
+    canonical   : canonicalEl ? canonicalEl.href : '',
+    robots      : robotsEl ? robotsEl.content : '',
+    titleLength : document.title.length,
+    lang        : document.documentElement.lang || '',
+    https       : location.protocol === 'https:'
+  };
+
+  // ЗАГОЛОВКИ
+  var headings = {};
+  ['H1','H2','H3','H4'].forEach(function(tag) {
+    var els = Array.from(document.querySelectorAll(tag)).filter(function(el) {
+      return el.offsetParent !== null && el.textContent.trim().length > 0;
+    });
+    headings[tag] = els.map(function(el) {
+      return el.textContent.trim().replace(/\s+/g, ' ').slice(0, 120);
+    });
+  });
+
+  // КОНТЕНТ (чистый текст без навигации)
+  var clone = document.body.cloneNode(true);
+  clone.querySelectorAll('script,style,nav,header,footer,aside,[class*="menu"],[class*="cookie"],[class*="popup"]')
+    .forEach(function(el) { el.remove(); });
+  var rawText = (clone.innerText || clone.textContent || '').replace(/\s+/g, ' ').trim();
+  var allWords = rawText.match(/[а-яёa-zA-Z]{3,}/gi) || [];
+  var wordCount = allWords.length;
+
+  // Топ слово и тошнота
+  var STOP = new Set(['что','это','как','для','при','или','все','уже','его','она','они','был','там','где','нет','вас','наш','вам','вот','так','если','очень','чтобы','которые','также','только','может','быть','этот','этой','этом','после','через','когда','более','будет','можно','нужно','самый','такой','свой','наши']);
+  var freq = {};
+  allWords.forEach(function(w) {
+    var wl = w.toLowerCase();
+    if (!STOP.has(wl) && wl.length >= 3) freq[wl] = (freq[wl] || 0) + 1;
+  });
+  var sorted = Object.entries(freq).sort(function(a,b) { return b[1]-a[1]; });
+  var topWord = sorted[0] ? sorted[0][0] : '';
+  var topWordPct = sorted[0] && wordCount ? (sorted[0][1] / wordCount * 100).toFixed(2) : '0';
+  var top10words = sorted.slice(0,10).map(function(e) { return e[0] + '(' + e[1] + ')'; }).join(', ');
+
+  // Первый абзац
+  var firstPara = rawText.slice(0, 300);
+
+  var content = {
+    wordCount   : wordCount,
+    topWord     : topWord,
+    topWordPct  : topWordPct,
+    top10words  : top10words,
+    firstPara   : firstPara,
+    hasNumbers  : /\d+\s?(%|млн|тыс|руб|₽|клиент|проект)/i.test(rawText),
+    hasFAQ      : /faq|часто.задавае|вопросы.и.ответ/i.test(rawText.toLowerCase()),
+    hasPrice    : /цен|стоимост|руб|₽|тариф/i.test(rawText.toLowerCase()),
+    hasReviews  : /отзыв|рейтинг/i.test(rawText.toLowerCase())
+  };
+
+  // ССЫЛКИ
+  var allLinks = Array.from(document.querySelectorAll('a[href]'));
+  var internalLinks = allLinks.filter(function(a) {
+    return a.href && a.href.includes(hostname) && !a.href.includes('#');
+  });
+  var externalLinks = allLinks.filter(function(a) {
+    return a.href && !a.href.includes(hostname) && a.href.startsWith('http');
+  });
+  var internalURLs = Array.from(new Set(internalLinks.map(function(a) { return a.pathname; }))).slice(0, 30);
+
+  var links = {
+    internal    : internalLinks.length,
+    external    : externalLinks.length,
+    internalURLs: internalURLs,
+    noAnchor    : allLinks.filter(function(a) { return !a.textContent.trim(); }).length
+  };
+
+  // ИЗОБРАЖЕНИЯ
+  var imgs = Array.from(document.querySelectorAll('img'));
+  var images = {
+    total       : imgs.length,
+    noAlt       : imgs.filter(function(i) { return !i.hasAttribute('alt'); }).length,
+    noLazy      : imgs.filter(function(i) { return i.loading !== 'lazy' && !i.dataset.src; }).length,
+    webp        : imgs.filter(function(i) { return (i.src || '').includes('.webp'); }).length
+  };
+
+  // SCHEMA
+  var schemas = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
+  var schemaTypes = [];
+  schemas.forEach(function(s) {
+    try {
+      var d = JSON.parse(s.textContent);
+      if (d['@type']) schemaTypes.push(d['@type']);
+      if (d['@graph']) d['@graph'].forEach(function(o) { if (o['@type']) schemaTypes.push(o['@type']); });
+    } catch(e) {}
+  });
+
+  // ТЕХНИЧЕСКИЕ
+  var hasViewport = !!document.querySelector('meta[name="viewport"]');
+  var hasSitemap  = false; // нельзя проверить из JS без fetch
+  var pageHeight  = document.body.scrollHeight;
+  var vpH = window.innerHeight;
+  var screens = Math.round(pageHeight / vpH);
+  var hScroll = document.documentElement.scrollWidth > window.innerWidth + 5;
+
+  var tech = {
+    hasViewport : hasViewport,
+    hScroll     : hScroll,
+    screens     : screens,
+    schemaTypes : schemaTypes,
+    hasOG       : !!document.querySelector('meta[property="og:title"]'),
+    hasAnalytics: !!(window.ym || window.ga || window.gtag || document.querySelector('[class*="metrika"],[id*="metrika"]')),
+    loadTime    : performance.timing ? Math.round(performance.timing.loadEventEnd - performance.timing.navigationStart) : null
+  };
+
+  // UX из AUDIT_STORE если он есть (мега-скрипт уже запустился)
+  var uxData = null;
+  if (window.AUDIT_STORE && window.AUDIT_STORE.ux) {
+    var ux = window.AUDIT_STORE.ux;
+    uxData = {
+      score     : ux.score || 0,
+      critCount : ux.counts ? ux.counts.crit : 0,
+      warnCount : ux.counts ? ux.counts.warn : 0,
+      crits     : (ux._CRITS || []).map(function(f) { return '[' + f.cat + '] ' + f.title; }),
+      warns     : (ux._WARNS || []).slice(0,5).map(function(f) { return '[' + f.cat + '] ' + f.title; }),
+      chains    : ux._CHAINS || [],
+      oks       : (ux._OKS || []).map(function(o) { return o.t; }),
+      h1OnFold  : ux.l1 ? ux.l1.h1OnFold : null,
+      ctaOnFold : ux.l1 ? ux.l1.ctaOnFoldCount : null
+    };
+  }
+
+  // SEO из AUDIT_STORE
+  var seoData = null;
+  if (window.AUDIT_STORE && window.AUDIT_STORE.seo && !window.AUDIT_STORE.seo.skipped) {
+    var seo = window.AUDIT_STORE.seo;
+    seoData = {
+      keywordsCount : seo.keywords ? seo.keywords.length : 0,
+      top3 : (seo.urgent || []).slice(0,3).map(function(r) {
+        return '"' + r['запрос'] + '" score:' + r['score'] + ' prior:' + r['🔥 приоритет'];
+      }),
+      needTitle : seo.recommendations ? seo.recommendations.title : [],
+      needH1    : seo.recommendations ? seo.recommendations.h1 : []
+    };
+  }
+
+  // GEO из AUDIT_STORE
+  var geoData = null;
+  if (window.AUDIT_STORE && window.AUDIT_STORE.geo) {
+    var geo = window.AUDIT_STORE.geo;
+    geoData = {
+      score   : geo.score,
+      passed  : geo.passed,
+      total   : geo.total,
+      issues  : (geo.issues || []).slice(0,5).map(function(i) { return i.сигнал; })
+    };
+  }
+
+  // ── СОБИРАЕМ СТРАНИЦУ ───────────────────────────────────────
+  var pageData = {
+    url        : url,
+    path       : location.pathname,
+    title      : document.title,
+    collectedAt: new Date().toISOString(),
+    meta       : meta,
+    headings   : headings,
+    content    : content,
+    links      : links,
+    images     : images,
+    tech       : tech,
+    ux         : uxData,
+    seo        : seoData,
+    geo        : geoData
+  };
+
+  store.pages.push(pageData);
+  store.updatedAt = new Date().toISOString();
+
+  // Сохраняем
+  try {
+    localStorage.setItem(KEY, JSON.stringify(store));
+  } catch(e) {
+    console.error('localStorage переполнен. Запусти Сброс и начни заново.');
+    return;
+  }
+
+  // ── ВЫВОД В КОНСОЛЬ ─────────────────────────────────────────
+  console.log('%c\n✅ СТРАНИЦА СОХРАНЕНА В БУФЕР', 'color:#16a34a;font-weight:bold;font-size:14px');
+  console.log('%c📄 ' + url, 'color:#1d4ed8');
+  console.log('%c📊 Всего страниц в буфере: ' + store.pages.length, 'color:#7c3aed;font-weight:bold');
+  console.log('%c─────────────────────────────────────────', 'color:#e5e7eb');
+  console.log('%c  Title (' + meta.titleLength + ' симв.): ' + document.title, 'color:#374151');
+  console.log('%c  H1: ' + (headings.H1.length ? headings.H1[0] : '❌ ОТСУТСТВУЕТ'), headings.H1.length ? 'color:#374151' : 'color:#dc2626;font-weight:bold');
+  console.log('%c  Слов: ' + wordCount + ' | Топ слово: "' + topWord + '" (' + topWordPct + '%)', 'color:#374151');
+  console.log('%c  Ссылок внутр.: ' + links.internal + ' | Страниц найдено: ' + internalURLs.length, 'color:#374151');
+  if (uxData) console.log('%c  UX score: ' + uxData.score + '/100 | ❌' + uxData.critCount + ' ⚠️' + uxData.warnCount, 'color:#374151');
+  if (geoData) console.log('%c  GEO: ' + geoData.score + '% (' + geoData.passed + '/' + geoData.total + ')', 'color:#374151');
+  console.log('%c─────────────────────────────────────────', 'color:#e5e7eb');
+
+  // Показываем все найденные внутренние страницы
+  if (internalURLs.length > 1) {
+    console.log('%c🔗 Найденные страницы сайта (можешь открыть и тоже собрать):', 'color:#7c3aed;font-weight:600');
+    internalURLs.forEach(function(path, i) {
+      var fullUrl = location.origin + path;
+      console.log('%c  ' + (i+1) + '. ' + fullUrl, 'color:#2563eb');
+    });
+  }
+
+  console.log('%c\n💡 Подсказка: открой следующую страницу сайта и снова кликни закладку "Собрать"', 'color:#6b7280;font-style:italic');
+  console.log('%c💡 Когда соберёшь все нужные страницы — кликни закладку "Отчёт"', 'color:#6b7280;font-style:italic');
+
+})();
