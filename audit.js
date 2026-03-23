@@ -468,4 +468,31 @@ window.uxAudit={
   document.body.appendChild(btn);
 })();
 
+// ── КОНСОЛЬНАЯ ПОДСКАЗКА ──────────────────────────────────────
+// Показывается сразу после запуска скрипта из консоли
+console.log('%c━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━','color:#1e1b4b');
+console.log('%c  📋 СКРИПТ ВЫПОЛНЕН', 'color:#16a34a;font-weight:900;font-size:16px');
+console.log('%c  Нажми кнопку «Скопировать аудит» в правом нижнем углу страницы','color:#374151;font-size:12px');
+console.log('%c  Или выполни в консоли: uxAudit.copy()','color:#7c3aed;font-size:12px');
+console.log('%c━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━','color:#1e1b4b');
+
+// Автокопирование через 1 секунду (даём время завершить рендер)
+setTimeout(function(){
+  var text = buildDownload();
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(function(){
+      console.log('%c  ✅ Аудит автоматически скопирован в буфер!','color:#16a34a;font-weight:700;font-size:14px');
+      console.log('%c  Вставляй в Telegram бот (Ctrl+V)','color:#374151;font-size:12px');
+      // Обновляем кнопку
+      var btn = document.getElementById('mega-audit-copy-btn');
+      if(btn){
+        btn.style.background='linear-gradient(135deg,#15803d 0%,#166534 100%)';
+        btn.innerHTML='<div style="display:flex;align-items:center;gap:10px;"><div style="width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:18px;">✅</div><div><div style="font-weight:700;font-size:13px;color:#fff;">Скопировано автоматически!</div><div style="font-size:10px;color:rgba(255,255,255,0.65);">Вставляй в бот · '+text.length.toLocaleString('ru-RU')+' симв.</div></div></div>';
+      }
+    }).catch(function(){
+      console.log('%c  ⚠️ Автокопирование не сработало — нажми кнопку на странице','color:#d97706;font-size:13px');
+    });
+  }
+}, 1000);
+
 })();
